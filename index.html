@@ -1,0 +1,143 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>WBF Inc. Weather Data — New Carlisle IN</title>
+<style>
+  body { font-family: monospace; font-size: 13px; padding: 20px; max-width: 900px; margin: 0 auto; background: #fff; color: #111; }
+  h2 { font-size: 15px; margin-top: 30px; border-bottom: 1px solid #ccc; padding-bottom: 4px; }
+  .meta { color: #555; font-size: 12px; margin-bottom: 20px; }
+  .error { color: red; }
+  table { border-collapse: collapse; width: 100%; margin-top: 8px; }
+  th, td { border: 1px solid #ddd; padding: 4px 8px; text-align: left; font-size: 12px; }
+  th { background: #f4f4f4; }
+  .cold { background: #d0e8ff; }
+  .very-cold { background: #ffd0d0; }
+  #status { font-style: italic; color: #444; }
+</style>
+</head>
+<body>
+
+<h1 style="font-size:16px;">WBF Inc. Weather Data Feed — New Carlisle, IN (41.7006, -86.3336)</h1>
+<p class="meta">Auto-fetched from Open-Meteo on page load. Reload to refresh. For use with corn emergence risk assessment.</p>
+<p id="status">Loading weather data...</p>
+
+<div id="output"></div>
+
+<script>
+const LAT = 41.7006;
+const LON = -86.3336;
+const TZ = "America/Chicago";
+
+const HIST_URL = `https://archive-api.open-meteo.com/v1/archive?latitude=${LAT}&longitude=${LON}&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=${TZ}&past_days=10`;
+const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&hourly=temperature_2m,precipitation_probability,precipitation&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=14`;
+
+async function fetchData(url) {
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`HTTP ${res.status} from ${url}`);
+  return res.json();
+}
+
+function soilTempEstimate(maxArr, minArr) {
+  const means = maxArr.map((mx, i) => (mx + minArr[i]) / 2);
+  const avg = means.reduce((a, b) => a + b, 0) / means.length;
+  return (avg - 3).toFixed(1);
+}
+
+function buildHistTable(data) {
+  const dates = data.daily.time;
+  const maxes = data.daily.temperature_2m_max;
+  const mins = data.daily.temperature_2m_min;
+  const soilEst = soilTempEstimate(maxes, mins);
+
+  let html = `<h2>Historical Temps — Past 10 Days (for soil temp estimation)</h2>`;
+  html += `<p><strong>Estimated soil temperature at 4-inch depth: ${soilEst}°F</strong> (10-day air temp average minus 3°F lag correction)</p>`;
+  html += `<table><tr><th>Date</th><th>High (°F)</th><th>Low (°F)</th><th>Daily Mean (°F)</th></tr>`;
+  for (let i = 0; i < dates.length; i++) {
+    const mean = ((maxes[i] + mins[i]) / 2).toFixed(1);
+    const coldClass = mins[i] < 50 ? ' class="cold"' : '';
+    html += `<tr${coldClass}><td>${dates[i]}</td><td>${maxes[i]}</td><td>${mins[i]}</td><td>${mean}</td></tr>`;
+  }
+  html += `</table>`;
+  return { html, soilEst };
+}
+
+function buildForecastTable(data) {
+  const times = data.hourly.time;
+  const temps = data.hourly.temperature_2m;
+  const precipProb = data.hourly.precipitation_probability;
+  const precip = data.hourly.precipitation;
+
+  let html = `<h2>Hourly Forecast — Next 14 Days</h2>`;
+  html += `<p>Blue = temp below 50°F. Red = temp below 40°F. Use for GDU accumulation and imbibition risk check.</p>`;
+  html += `<table><tr><th>Date/Time</th><th>Temp (°F)</th><th>Precip Prob (%)</th><th>Precip (mm)</th><th>Imbi Risk Flag</th></tr>`;
+
+  for (let i = 0; i < times.length; i++) {
+    const t = temps[i];
+    const pp = precipProb[i];
+    const pr = precip[i];
+    const flag = (t < 50 && (pr > 0.1 || pp > 40)) ? (t < 40 ? 'HIGH RISK' : 'MODERATE RISK') : '';
+    const rowClass = t < 40 ? ' class="very-cold"' : t < 50 ? ' class="cold"' : '';
+    html += `<tr${rowClass}><td>${times[i]}</td><td>${t}</td><td>${pp ?? '—'}</td><td>${pr ?? '—'}</td><td>${flag}</td></tr>`;
+  }
+  html += `</table>`;
+  return html;
+}
+
+function buildDailySummary(data) {
+  const times = data.hourly.time;
+  const temps = data.hourly.temperature_2m;
+
+  const byDay = {};
+  for (let i = 0; i < times.length; i++) {
+    const date = times[i].split('T')[0];
+    if (!byDay[date]) byDay[date] = [];
+    byDay[date].push(temps[i]);
+  }
+
+  let html = `<h2>Daily High/Low Summary — Next 14 Days (for GDU calculation)</h2>`;
+  html += `<p>GDU per day = max(((High + Low) / 2) - 50, 0). High capped at 86°F, Low floored at 50°F.</p>`;
+  html += `<table><tr><th>Date</th><th>Forecast High (°F)</th><th>Forecast Low (°F)</th><th>GDU That Day</th></tr>`;
+
+  let cumGDU = 0;
+  for (const [date, hourlyTemps] of Object.entries(byDay)) {
+    const high = Math.min(Math.max(...hourlyTemps), 86);
+    const low = Math.max(Math.min(...hourlyTemps), 50);
+    const gdu = Math.max(((high + low) / 2) - 50, 0).toFixed(1);
+    cumGDU += parseFloat(gdu);
+    html += `<tr><td>${date}</td><td>${Math.max(...hourlyTemps).toFixed(1)}</td><td>${Math.min(...hourlyTemps).toFixed(1)}</td><td>${gdu} (cumulative: ${cumGDU.toFixed(1)})</td></tr>`;
+  }
+  html += `</table>`;
+  return html;
+}
+
+async function run() {
+  const statusEl = document.getElementById('status');
+  const outputEl = document.getElementById('output');
+
+  try {
+    statusEl.textContent = 'Fetching historical data...';
+    const histData = await fetchData(HIST_URL);
+
+    statusEl.textContent = 'Fetching forecast data...';
+    const forecastData = await fetchData(FORECAST_URL);
+
+    statusEl.textContent = `Data loaded successfully. Generated: ${new Date().toLocaleString('en-US', {timeZone: TZ})} CT`;
+
+    const { html: histHtml, soilEst } = buildHistTable(histData);
+    const dailyHtml = buildDailySummary(forecastData);
+    const hourlyHtml = buildForecastTable(forecastData);
+
+    outputEl.innerHTML = histHtml + dailyHtml + hourlyHtml;
+
+  } catch (err) {
+    statusEl.className = 'error';
+    statusEl.textContent = `Error loading data: ${err.message}`;
+  }
+}
+
+run();
+</script>
+</body>
+</html>
