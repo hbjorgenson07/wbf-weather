@@ -28,7 +28,7 @@
 <script>
 const LAT = 41.696308;
 const LON = -86.537765;
-const TZ = "America/Chicago";
+const TZ = "America/Indianapolis";
 
 const HIST_URL = `https://archive-api.open-meteo.com/v1/archive?latitude=${LAT}&longitude=${LON}&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=${TZ}&past_days=10`;
 const FORECAST_URL = `https://api.open-meteo.com/v1/forecast?latitude=${LAT}&longitude=${LON}&hourly=temperature_2m,precipitation_probability,precipitation&temperature_unit=fahrenheit&timezone=${TZ}&forecast_days=14`;
